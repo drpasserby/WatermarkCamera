@@ -200,6 +200,10 @@
             <label class="f"><span>C 日期</span><input type="text" id="inputC"></label>
             <div class="row"><button id="nowBtn">按当前时间刷新</button></div>
         </div>
+
+        <div class="group">
+            <div class="row"><button id="resetAllBtn">一键重置参数</button></div>
+        </div>
     </aside>
 
     <footer>Copyright © <span id="year"></span> Dust水印相机</footer>
@@ -221,6 +225,8 @@
     var TIME_SQUEEZE = 0.72;     // 真机的时间是窄体字，用横向压缩近似
     var GRID = 64;
     var PREVIEW_MAX = 1400;
+    var STORAGE_KEY = 'dust-watermark-settings-v1';
+    var DEFAULT_ADDR = '广东省深圳市福田区莲花街道福中社区福中三路2012号市民中心C区';
 
     // 文字坐标按左块包围盒归一化（code 按 logo 块），取自真机截图实测换算
     var L = {
@@ -292,6 +298,74 @@
     };
 
     function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+    // 只持久化水印参数，不保存照片、A 时间和 C 日期
+    function loadSettings() {
+        var saved;
+        try {
+            saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        } catch (e) {
+            return;
+        }
+        if (!saved || typeof saved !== 'object') return;
+        if (saved.position === 'auto' ||
+            Object.prototype.hasOwnProperty.call(ANCHORS, saved.position)) {
+            state.opts.position = saved.position;
+        }
+        if (saved.scrim === 'auto' || saved.scrim === 'on' || saved.scrim === 'off') {
+            state.opts.scrim = saved.scrim;
+        }
+        if (typeof saved.size === 'number' && isFinite(saved.size)) {
+            state.opts.size = clamp(saved.size, 0.6, 1.6);
+        }
+        if (saved.tune && typeof saved.tune === 'object') {
+            for (var k in TUNE_DEFAULT) {
+                var group = saved.tune[k];
+                if (!group || typeof group !== 'object') continue;
+                for (var f in TUNE_DEFAULT[k]) {
+                    var v = group[f];
+                    if (typeof v === 'number' && isFinite(v)) {
+                        state.opts.tune[k][f] = clamp(v, TUNE_RANGE[f].min, TUNE_RANGE[f].max);
+                    }
+                }
+            }
+        }
+        if (typeof saved.addr === 'string') state.texts.addr = saved.addr;
+        // 旧版本曾持久化日期，读到后顺手从本地配置里移除
+        if (Object.prototype.hasOwnProperty.call(saved, 'date')) saveSettings();
+    }
+
+    function saveSettings() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                position: state.opts.position,
+                scrim: state.opts.scrim,
+                size: state.opts.size,
+                tune: state.opts.tune,
+                addr: state.texts.addr
+            }));
+        } catch (e) { }
+    }
+
+    function resetSettings() {
+        try {
+            localStorage.removeItem(STORAGE_KEY);
+        } catch (e) { }
+        state.opts = { position: 'bottom', scrim: 'off', size: 1, tune: tuneDefaults() };
+        state.texts.time = nowTime();
+        state.texts.date = nowDate();
+        state.texts.addr = DEFAULT_ADDR;
+        $('positionSel').value = state.opts.position;
+        $('scrimSel').value = state.opts.scrim;
+        $('sizeRange').value = state.opts.size;
+        $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
+        $('inputA').value = state.texts.time;
+        $('inputB').value = state.texts.addr;
+        $('inputC').value = state.texts.date;
+        syncTune();
+        state.camPlan = null;
+        refresh();
+    }
 
     // 不用 img.decode()：部分内核上它对 data URI / blob 源会永不 resolve，导入流程会整体卡死
     function whenLoaded(img) {
@@ -929,6 +1003,7 @@
                     state.opts.tune[g.key][f[0]] = parseFloat(e.target.value);
                     $('tuneo_' + g.key + '_' + f[0]).textContent = tuneLabel(f[0], e.target.value);
                     state.camPlan = null;
+                    saveSettings();
                     refresh();
                 });
             });
@@ -937,6 +1012,7 @@
             state.opts.tune = tuneDefaults();
             syncTune();
             state.camPlan = null;
+            saveSettings();
             refresh();
         });
     }
@@ -969,22 +1045,26 @@
         $('positionSel').addEventListener('change', function (e) {
             state.opts.position = e.target.value;
             state.camPlan = null;
+            saveSettings();
             refresh();
         });
         $('scrimSel').addEventListener('change', function (e) {
             state.opts.scrim = e.target.value;
             state.camPlan = null;
+            saveSettings();
             refresh();
         });
         $('sizeRange').addEventListener('input', function (e) {
             state.opts.size = parseFloat(e.target.value);
             $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
             state.camPlan = null;
+            saveSettings();
             refresh();
         });
         ['inputA', 'inputB', 'inputC'].forEach(function (id, i) {
             $(id).addEventListener('input', function (e) {
                 state.texts[['time', 'addr', 'date'][i]] = e.target.value;
+                if (i === 1) saveSettings();
                 refresh();
             });
         });
@@ -998,6 +1078,8 @@
             if (p) p.code = randomCode(14);
             refresh();
         });
+
+        $('resetAllBtn').addEventListener('click', resetSettings);
 
         buildTune();
 
@@ -1024,7 +1106,12 @@
         $('year').textContent = new Date().getFullYear();
         state.texts.time = nowTime();
         state.texts.date = nowDate();
-        state.texts.addr = '广东省深圳市福田区莲花街道福中社区福中三路2012号市民中心C区';
+        state.texts.addr = DEFAULT_ADDR;
+        loadSettings();
+        $('positionSel').value = state.opts.position;
+        $('scrimSel').value = state.opts.scrim;
+        $('sizeRange').value = state.opts.size;
+        $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
         $('inputA').value = state.texts.time;
         $('inputB').value = state.texts.addr;
         $('inputC').value = state.texts.date;
