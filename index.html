@@ -121,6 +121,15 @@
     .trow input[type="range"] { flex: 1 1 auto; width: auto; }
     .trow output { flex: 0 0 48px; text-align: right; font-size: 11.5px; color: var(--muted); }
     footer { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; }
+    .notice { margin-bottom: 5px; }
+    .notice a {
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid rgba(87,152,255,.35);
+        transition: border-color .15s;
+    }
+    .notice a:hover { border-bottom-color: var(--accent); }
+    .preset-hint { margin-top: 7px; min-height: 17px; font-size: 12px; color: var(--muted); }
     #videoElement { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; }
     @media (max-width: 880px) {
         .wrap { grid-template-columns: 1fr; }
@@ -202,11 +211,27 @@
         </div>
 
         <div class="group">
+            <h2>预设</h2>
+            <label class="f"><span>切换预设</span>
+                <select id="presetSel"><option value="-1">暂无预设</option></select>
+            </label>
+            <label class="f"><span>预设名称</span><input type="text" id="presetName" maxlength="30" placeholder="例如：工地巡检"></label>
+            <div class="row">
+                <button id="presetSaveBtn">保存预设</button>
+                <button id="presetDelBtn" disabled>删除预设</button>
+            </div>
+            <div class="preset-hint" id="presetHint"></div>
+        </div>
+
+        <div class="group">
             <div class="row"><button id="resetAllBtn">一键重置参数</button></div>
         </div>
     </aside>
 
-    <footer>Copyright © <span id="year"></span> Dust水印相机</footer>
+    <footer>
+        <div class="notice">该代码仅供前端学习交流，请勿用作非法用途。<a href="https://github.com/xiaotiannan/888tiannan.github.io" target="_blank" rel="noopener noreferrer">水印素材来源</a></div>
+        <div>Copyright © <span id="year"></span> Dust水印相机</div>
+    </footer>
 </div>
 
 <video id="videoElement" autoplay playsinline muted></video>
@@ -226,6 +251,7 @@
     var GRID = 64;
     var PREVIEW_MAX = 1400;
     var STORAGE_KEY = 'dust-watermark-settings-v1';
+    var PRESET_KEY = 'dust-watermark-presets-v1';
     var DEFAULT_ADDR = '广东省深圳市福田区莲花街道福中社区福中三路2012号市民中心C区';
 
     // 文字坐标按左块包围盒归一化（code 按 logo 块），取自真机截图实测换算
@@ -293,20 +319,14 @@
         rafId: 0,
         opts: { position: 'bottom', scrim: 'off', size: 1, tune: tuneDefaults() },
         texts: { time: '', addr: '', date: '' },
+        presets: [],
         camPlan: null,
         camPlanAt: 0
     };
 
     function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
-    // 只持久化水印参数，不保存照片、A 时间和 C 日期
-    function loadSettings() {
-        var saved;
-        try {
-            saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-        } catch (e) {
-            return;
-        }
+    function applySettings(saved) {
         if (!saved || typeof saved !== 'object') return;
         if (saved.position === 'auto' ||
             Object.prototype.hasOwnProperty.call(ANCHORS, saved.position)) {
@@ -331,11 +351,33 @@
             }
         }
         if (typeof saved.addr === 'string') state.texts.addr = saved.addr;
-        // 旧版本曾持久化日期，读到后顺手从本地配置里移除
-        if (Object.prototype.hasOwnProperty.call(saved, 'date')) saveSettings();
     }
 
-    function saveSettings() {
+    // 只持久化水印参数，不保存照片、A 时间和 C 日期
+    function loadSettings() {
+        var saved;
+        try {
+            saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        } catch (e) {
+            return;
+        }
+        applySettings(saved);
+        // 旧版本曾持久化日期，读到后顺手从本地配置里移除
+        if (saved && typeof saved === 'object' &&
+            Object.prototype.hasOwnProperty.call(saved, 'date')) saveSettings();
+    }
+
+    function currentSettings() {
+        return {
+            position: state.opts.position,
+            scrim: state.opts.scrim,
+            size: state.opts.size,
+            tune: JSON.parse(JSON.stringify(state.opts.tune)),
+            addr: state.texts.addr
+        };
+    }
+
+    function saveSettings(keepPreset) {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
                 position: state.opts.position,
@@ -345,6 +387,20 @@
                 addr: state.texts.addr
             }));
         } catch (e) { }
+        if (!keepPreset) {
+            $('presetSel').value = '-1';
+            $('presetDelBtn').disabled = true;
+        }
+    }
+
+    function syncControls() {
+        $('positionSel').value = state.opts.position;
+        $('scrimSel').value = state.opts.scrim;
+        $('sizeRange').value = state.opts.size;
+        $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
+        $('inputA').value = state.texts.time;
+        $('inputB').value = state.texts.addr;
+        $('inputC').value = state.texts.date;
     }
 
     function resetSettings() {
@@ -355,16 +411,113 @@
         state.texts.time = nowTime();
         state.texts.date = nowDate();
         state.texts.addr = DEFAULT_ADDR;
-        $('positionSel').value = state.opts.position;
-        $('scrimSel').value = state.opts.scrim;
-        $('sizeRange').value = state.opts.size;
-        $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
-        $('inputA').value = state.texts.time;
-        $('inputB').value = state.texts.addr;
-        $('inputC').value = state.texts.date;
+        syncControls();
         syncTune();
+        $('presetSel').value = '-1';
+        $('presetDelBtn').disabled = true;
+        setPresetHint('当前参数已重置，预设保留');
         state.camPlan = null;
         refresh();
+    }
+
+    function setPresetHint(msg) {
+        $('presetHint').textContent = msg || '';
+    }
+
+    function renderPresets(selected) {
+        var sel = $('presetSel');
+        while (sel.firstChild) sel.removeChild(sel.firstChild);
+        var none = document.createElement('option');
+        none.value = '-1';
+        none.textContent = state.presets.length ? '选择预设…' : '暂无预设';
+        sel.appendChild(none);
+        state.presets.forEach(function (p, i) {
+            var opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = p.name;
+            sel.appendChild(opt);
+        });
+        sel.value = (typeof selected === 'number' && state.presets[selected]) ? String(selected) : '-1';
+        $('presetDelBtn').disabled = sel.value === '-1';
+    }
+
+    function loadPresets() {
+        try {
+            var list = JSON.parse(localStorage.getItem(PRESET_KEY) || '[]');
+            if (Array.isArray(list)) {
+                state.presets = list.filter(function (p) {
+                    return p && typeof p.name === 'string' && p.name.trim() &&
+                        p.settings && typeof p.settings === 'object';
+                }).map(function (p) {
+                    return { name: p.name.trim().slice(0, 30), settings: p.settings };
+                });
+            }
+        } catch (e) { }
+        renderPresets();
+    }
+
+    function savePresets() {
+        try {
+            localStorage.setItem(PRESET_KEY, JSON.stringify(state.presets));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function savePreset() {
+        var input = $('presetName');
+        var name = input.value.trim();
+        if (!name) {
+            setPresetHint('请输入预设名称');
+            input.focus();
+            return;
+        }
+        var index = -1;
+        for (var i = 0; i < state.presets.length; i++) {
+            if (state.presets[i].name === name) { index = i; break; }
+        }
+        var isUpdate = index >= 0;
+        if (isUpdate) {
+            state.presets[index].settings = currentSettings();
+        } else {
+            state.presets.push({ name: name, settings: currentSettings() });
+            index = state.presets.length - 1;
+        }
+        if (!savePresets()) {
+            if (!isUpdate) state.presets.pop();
+            setPresetHint('保存失败：本地存储不可用');
+            return;
+        }
+        renderPresets(index);
+        setPresetHint((isUpdate ? '已更新预设「' : '已保存预设「') + name + '」');
+        input.value = '';
+    }
+
+    function applyPreset(index) {
+        var preset = state.presets[index];
+        if (!preset) return;
+        state.opts = { position: 'bottom', scrim: 'off', size: 1, tune: tuneDefaults() };
+        applySettings(preset.settings);
+        syncControls();
+        syncTune();
+        state.camPlan = null;
+        saveSettings(true);
+        refresh();
+        setPresetHint('已应用预设「' + preset.name + '」');
+    }
+
+    function deletePreset() {
+        var index = parseInt($('presetSel').value, 10);
+        if (!(index >= 0 && state.presets[index])) return;
+        var removed = state.presets.splice(index, 1)[0];
+        if (!savePresets()) {
+            state.presets.splice(index, 0, removed);
+            setPresetHint('删除失败：本地存储不可用');
+        } else {
+            setPresetHint('已删除预设「' + removed.name + '」');
+        }
+        renderPresets();
     }
 
     // 不用 img.decode()：部分内核上它对 data URI / blob 源会永不 resolve，导入流程会整体卡死
@@ -1079,6 +1232,21 @@
             refresh();
         });
 
+        $('presetSel').addEventListener('change', function (e) {
+            var index = parseInt(e.target.value, 10);
+            $('presetDelBtn').disabled = !(index >= 0);
+            if (index >= 0) applyPreset(index);
+            else setPresetHint('');
+        });
+        $('presetSaveBtn').addEventListener('click', savePreset);
+        $('presetDelBtn').addEventListener('click', deletePreset);
+        $('presetName').addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                savePreset();
+            }
+        });
+
         $('resetAllBtn').addEventListener('click', resetSettings);
 
         buildTune();
@@ -1108,14 +1276,9 @@
         state.texts.date = nowDate();
         state.texts.addr = DEFAULT_ADDR;
         loadSettings();
-        $('positionSel').value = state.opts.position;
-        $('scrimSel').value = state.opts.scrim;
-        $('sizeRange').value = state.opts.size;
-        $('sizeOut').textContent = state.opts.size.toFixed(2) + '×';
-        $('inputA').value = state.texts.time;
-        $('inputB').value = state.texts.addr;
-        $('inputC').value = state.texts.date;
+        syncControls();
         bindUI();
+        loadPresets();
         whenLoaded(stripImg).then(function () {
             $('readout').textContent = '可以导入了：拖拽、粘贴或点「导入照片」。水印尺寸会按照片自动适配，位置与衬底见右侧选项。';
         }).catch(function () {
