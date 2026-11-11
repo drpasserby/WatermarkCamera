@@ -316,6 +316,7 @@
         current: -1,
         stream: null,
         cameraOn: false,
+        capturing: false,
         rafId: 0,
         opts: { position: 'bottom', scrim: 'off', size: 1, tune: tuneDefaults() },
         texts: { time: '', addr: '', date: '' },
@@ -878,6 +879,13 @@
         return state.photos[state.current] || null;
     }
 
+    function syncButtons() {
+        $('camBtn').textContent = state.cameraOn ? '停止相机' : '使用相机';
+        $('exportBtn').textContent = state.cameraOn ? '拍照' : '导出当前';
+        $('exportBtn').disabled = state.capturing || (!state.cameraOn && !currentPhoto());
+        $('exportAllBtn').disabled = state.photos.length < 2;
+    }
+
     // ---------- 相机 ----------
 
     function stopCamera() {
@@ -890,6 +898,7 @@
         state.cameraOn = false;
         state.camPlan = null;
         videoEl.srcObject = null;
+        syncButtons();
     }
 
     function cameraLoop(ts) {
@@ -941,12 +950,58 @@
                 state.stream = stream;
                 state.cameraOn = true;
                 videoEl.srcObject = stream;
-                $('camBtn').textContent = '停止相机';
+                syncButtons();
                 state.rafId = requestAnimationFrame(cameraLoop);
             })
             .catch(function (err) {
                 $('readout').textContent = '相机不可用：' + err.name + ' ' + err.message;
             });
+    }
+
+    // 定格当前帧加入照片列表，随后退出相机进入水印编辑
+    function cameraShot() {
+        var v = videoEl;
+        if (!state.cameraOn || !v.videoWidth) return;
+        var W = v.videoWidth;
+        var H = v.videoHeight;
+        var c = document.createElement('canvas');
+        c.width = W;
+        c.height = H;
+        c.getContext('2d').drawImage(v, 0, 0, W, H);
+        stopCamera();
+        state.capturing = true;
+        syncButtons();
+        $('readout').textContent = '正在定格画面…';
+        c.toBlob(function (blob) {
+            if (!blob) {
+                state.capturing = false;
+                var prev = currentPhoto();
+                if (prev) showPhoto(prev); else clearPreview();
+                syncButtons();
+                $('readout').textContent = '拍照失败：当前帧无法编码。';
+                return;
+            }
+            var url = URL.createObjectURL(blob);
+            var img = new Image();
+            img.onload = function () {
+                state.capturing = false;
+                state.photos.push({
+                    id: ++uid, name: '相机_' + stamp() + '.jpg', img: img, url: url,
+                    w: W, h: H, analysis: analyze(img), code: randomCode(14)
+                });
+                selectPhoto(state.photos.length - 1);
+                $('readout').innerHTML += ' ｜ <b>已定格</b>，已加入照片列表';
+            };
+            img.onerror = function () {
+                state.capturing = false;
+                URL.revokeObjectURL(url);
+                var prev = currentPhoto();
+                if (prev) showPhoto(prev); else clearPreview();
+                syncButtons();
+                $('readout').textContent = '拍照失败：无法读取当前帧。';
+            };
+            img.src = url;
+        }, 'image/jpeg', 0.95);
     }
 
     // ---------- 导入 ----------
@@ -976,7 +1031,6 @@
             var ok = added.filter(Boolean);
             if (!ok.length) return 0;
             stopCamera();
-            $('camBtn').textContent = '使用相机';
             state.photos = state.photos.concat(ok);
             selectPhoto(state.photos.length - ok.length);
             renderThumbs();
@@ -989,8 +1043,7 @@
         state.current = i;
         renderThumbs();
         showPhoto(state.photos[i]);
-        $('exportBtn').disabled = false;
-        $('exportAllBtn').disabled = state.photos.length < 2;
+        syncButtons();
     }
 
     function renderThumbs() {
@@ -1017,14 +1070,14 @@
             d.addEventListener('click', function () { selectPhoto(i); });
             box.appendChild(d);
         });
-        $('exportAllBtn').disabled = state.photos.length < 2;
+        syncButtons();
     }
 
     function clearPreview() {
         preview.classList.add('empty');
         $('hint').style.display = '';
         $('readout').textContent = '尚未加载照片。';
-        $('exportBtn').disabled = true;
+        syncButtons();
     }
 
     // ---------- 导出 ----------
@@ -1067,12 +1120,6 @@
     function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
     function exportCurrent() {
-        if (state.cameraOn) {
-            if (!videoEl.videoWidth) return;
-            finish(exportCanvas(videoEl, videoEl.videoWidth, videoEl.videoHeight, analyze(videoEl), state.texts, sessionCode),
-                '相机_' + stamp() + '.jpg');
-            return;
-        }
         var p = currentPhoto();
         if (!p) return;
         finish(exportCanvas(p.img, p.w, p.h, p.analysis, state.texts, p.code), baseName(p.name) + '_水印_' + stamp() + '.jpg');
@@ -1094,7 +1141,7 @@
         $('exportAllBtn').disabled = true;
         (function next() {
             if (i >= list.length) {
-                $('exportAllBtn').disabled = false;
+                syncButtons();
                 $('readout').textContent = '批量导出完成，共 ' + list.length + ' 张。';
                 return;
             }
@@ -1179,14 +1226,15 @@
         $('camBtn').addEventListener('click', function () {
             if (state.cameraOn) {
                 stopCamera();
-                $('camBtn').textContent = '使用相机';
                 var p = currentPhoto();
                 if (p) showPhoto(p); else clearPreview();
             } else {
                 startCamera();
             }
         });
-        $('exportBtn').addEventListener('click', exportCurrent);
+        $('exportBtn').addEventListener('click', function () {
+            if (state.cameraOn) cameraShot(); else exportCurrent();
+        });
         $('exportAllBtn').addEventListener('click', exportAll);
         $('clearBtn').addEventListener('click', function () {
             state.photos.forEach(function (p) { URL.revokeObjectURL(p.url); });
@@ -1279,6 +1327,7 @@
         syncControls();
         bindUI();
         loadPresets();
+        syncButtons();
         whenLoaded(stripImg).then(function () {
             $('readout').textContent = '可以导入了：拖拽、粘贴或点「导入照片」。水印尺寸会按照片自动适配，位置与衬底见右侧选项。';
         }).catch(function () {
