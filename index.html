@@ -48,6 +48,30 @@
         min-height: 220px;
     }
     #dropZone.dragover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(87,152,255,.25) inset; }
+    #dropZone.camera { border-color: rgba(232,163,61,.55); cursor: crosshair; }
+    #dropZone.camera:hover { border-color: #e8a33d; box-shadow: 0 0 0 2px rgba(232,163,61,.12) inset; }
+    #camHint {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 8px;
+        padding: 7px 11px;
+        background: rgba(232,163,61,.07);
+        border: 1px solid rgba(232,163,61,.55);
+        border-radius: 9px;
+        color: #e8a33d;
+        font-size: 12.5px;
+    }
+    #camHint::before {
+        content: '';
+        flex: 0 0 auto;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #e8a33d;
+        box-shadow: 0 0 0 3px rgba(232,163,61,.15);
+    }
+    #camHint[hidden] { display: none; }
     #preview { display: block; width: 100%; height: auto; }
     #preview.empty { display: none; }
     #hint { padding: 40px 18px; color: var(--muted); text-align: center; font-size: 13px; }
@@ -143,6 +167,7 @@
     </header>
 
     <section class="stage">
+        <div id="camHint" hidden>点击画面进行拍照</div>
         <div id="dropZone">
             <canvas id="preview" class="empty"></canvas>
             <div id="hint">把照片拖到这里 · 或 Ctrl + V 粘贴 · 或用右侧「导入照片」<br>支持多选、横图竖图全景图自动适配</div>
@@ -881,9 +906,11 @@
 
     function syncButtons() {
         $('camBtn').textContent = state.cameraOn ? '停止相机' : '使用相机';
-        $('exportBtn').textContent = state.cameraOn ? '拍照' : '导出当前';
-        $('exportBtn').disabled = state.capturing || (!state.cameraOn && !currentPhoto());
+        $('exportBtn').textContent = '导出当前';
+        $('exportBtn').disabled = state.capturing || state.cameraOn || !currentPhoto();
         $('exportAllBtn').disabled = state.photos.length < 2;
+        $('camHint').hidden = !state.cameraOn;
+        $('dropZone').classList.toggle('camera', state.cameraOn);
     }
 
     // ---------- 相机 ----------
@@ -1232,8 +1259,9 @@
                 startCamera();
             }
         });
-        $('exportBtn').addEventListener('click', function () {
-            if (state.cameraOn) cameraShot(); else exportCurrent();
+        $('exportBtn').addEventListener('click', exportCurrent);
+        $('dropZone').addEventListener('click', function () {
+            if (state.cameraOn) cameraShot();
         });
         $('exportAllBtn').addEventListener('click', exportAll);
         $('clearBtn').addEventListener('click', function () {
